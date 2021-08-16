@@ -40,11 +40,11 @@ def dict_merge(dct, merge_dct):
         else:
             dct[k] = merge_dct[k]
 
-def timestamp_to_datestring(timestamp: int):
+def timestamp_to_datestring(timestamp: int, form="%d.%m.%Y"):
     """Convert Unix timestamp to DD.MM.YYYY HH:SS (31.12.2020 23:59) - default to empty string for empty dates"""
     if not timestamp:
         return ""
-    return datetime.datetime.fromtimestamp(timestamp/1000).strftime("%d.%m.%Y")
+    return datetime.datetime.fromtimestamp(timestamp/1000).strftime(form)
 
 def datestring_to_int(datestring):
     # Convert DD.MM.YYYY HH:SS (31.12.2020 23:59) to Unix timestamp (int)
@@ -134,6 +134,7 @@ def create_default_person(persondict, personuuid):
     # Creates new person with data specified in persondict
     # Uses defaultvalues specified in config.person_template_uuid (Except address/phone/mail)
     person = query("persons", config.person_template_uuid)
+    #TODO: Warning if uuid not available
     person.pop("creationDate", None)
     person.pop("changeDate", None)
     person.pop("address", None)
@@ -235,10 +236,12 @@ def update_task(taskuuid, changedict = {}, commentprefix = ""):
         tjson["creatorComment"] = commentprefix
     return push("tasks",tjson)
 
-def update_case(uuid, changedict = {}, commentprefix=""):
+def update_case(uuid, changedict = {}, commentprefix="", followupprefix=""):
     # Updates an existing case
     # Careful! Might result in data loss
     json = query("cases", uuid)
+    #Todo: Warning if uuid not found
+    #Todo: Warning if uuid not found
     l = ["responsibleDistrict","responsibleRegion","responsibleCommunity","district", "region", "community", "reportingDistrict", "reportingUser", "followUpStatusChangeUser", "surveillanceOfficer", "classificationUser","pointOfEntry"]
     for key in l:
         if key in json:
@@ -257,6 +260,10 @@ def update_case(uuid, changedict = {}, commentprefix=""):
         json["additionalDetails"]=""
     if commentprefix:
         json["additionalDetails"]=commentprefix+json["additionalDetails"]
+    if not "followUpComment" in json and followupprefix:
+        json["followUpComment"]=""
+    if followupprefix:
+        json["followUpComment"]=followupprefix+json["followUpComment"]
     return push("cases",json)
     
 def update_contact(uuid, changedict = {}, commentprefix=""):
@@ -317,4 +324,15 @@ def get_earliest_positive_PCR(caseuuid):
         if len([1 for x in get_pathogentests(sample["uuid"]) if x['testResult']=="POSITIVE" and x["testType"]=="PCR_RT_PCR"])>0:
             return sample['sampleDateTime']
     return ""
-        
+
+def get_all_samples(caseuuid):
+    #Return list of all samples and sampletests
+    samplelist = []
+    samplejson = sorted(get_case_samples(caseuuid), key = lambda x: x['sampleDateTime'])
+    
+    for sample in samplejson:
+        #TODO handle samples w/o associated pathongetest
+        for pgt in get_pathogentests(sample["uuid"]):
+            samplelist.append((sample,pgt))
+    return samplelist
+            
