@@ -4,6 +4,10 @@ import config
 import string
 import random
 import collections
+import csv
+import sys
+import os
+import json
 
 from pprint import pprint
 
@@ -39,6 +43,13 @@ def dict_merge(dct, merge_dct):
             dct[k]+= merge_dct[k]                                                                           # Lists will be concatenated, not overwritten
         else:
             dct[k] = merge_dct[k]
+            
+def is_fully_vaccinated(casejson):
+    if casejson.get("vaccinationDoses","")==2 and casejson.get("lastVaccinationDate", now()) <= (casejson.get("quarantineFrom", now()) - 1209600000):
+        return True
+    if casejson.get("vaccineName","")=="AD26_COV2_S" and casejson.get("lastVaccinationDate", now()) <= (casejson.get("quarantineFrom", now()) - 1209600000):
+        return True 
+    return False
 
 def timestamp_to_datestring(timestamp: int, form="%d.%m.%Y"):
     """Convert Unix timestamp to DD.MM.YYYY HH:SS (31.12.2020 23:59) - default to empty string for empty dates"""
@@ -69,10 +80,20 @@ def excelint_to_datetuple(exceldate):
 def now():
     return round(time.time())*1000
 
-def is_adult(datestring):
-    # Input: DD.MM.YYYY
-    # Sloppy adult check
-    return (datetime.datetime.today() - datetime.datetime.strptime(datestring,"%d.%m.%Y")).days>=6574
+def is_adult(birthdate): 
+    """
+    Sloppy check if a person is adult.
+    Date format: yyyy-mm-dd
+    Defaults to 'True' in case of missing or malformated data
+    """
+    today = datetime.date.today()
+    try:
+        person_birthdate=datetime.date.fromisoformat(birthdate)
+    except:
+        return True
+    if (today-person_birthdate).days > 6574:
+        return True
+    return False
 
 def get_since(table, datestring = "", dateint = 0):
     # Return json list of all items from table since datestring. Date Format: 31.12.2020 23:59
@@ -336,3 +357,77 @@ def get_all_samples(caseuuid):
             samplelist.append((sample,pgt))
     return samplelist
             
+def initialize_cache(folder):
+    print("Initializing cases")
+    while True:
+        try:
+            initialize_json(os.path.join(folder,"cases.json"))
+            break
+        except:
+            print(sys.exc_info())
+            print("API Error... will try again in 60 seconds")
+            time.sleep(60)
+    casedict = load_and_update_json(os.path.join(os.path.join(folder,"cases.json")))
+    print("Initializing case persons")
+    while True:
+        try:
+            initialize_json(os.path.join(folder,"persons.json"),"persons", interval=500)
+            break
+        except:
+            print(sys.exc_info())
+            print("API Error... will try again in 60 seconds")
+            time.sleep(60)
+    print("Initialization complete")
+    print("Initializing tasks")
+    while True:
+        try:
+            initialize_json(os.path.join(folder,"tasks.json"),"tasks", interval=500)
+            break
+        except:
+            print(sys.exc_info())
+            print("API Error... will try again in 60 seconds")
+            time.sleep(60)
+    print("Initialization complete")
+
+def load_and_update_json(filename, table="cases", override_date=""):
+    # 1) Reads json dump 
+    # 2) Updates all cases updated since last dump 
+    # 3) Adds new cases
+    # override_date: force update since date / datetime (dd.mm.yyyy / dd.mm.yyyy HH:SS)
+    jsondict = {}
+    with open(filename) as jsonfile:
+        jsondict = json.load(jsonfile)
+    changedate = max([jsondict[key]["changeDate"] for key in jsondict])
+    if override_date:
+        changedate = datestring_to_int(override_date)
+    new_jsons = get_since(table, dateint = changedate)
+    for js in new_jsons:
+        jsondict[js["uuid"]] = js
+    with open(filename, "w") as outfile:
+        json.dump(jsondict, outfile)
+    print("Done")
+    return jsondict
+    
+def initialize_json(filename, table = "cases", interval = 250):
+    print("Getting "+table+" data... might take a while")
+    jsondict = {}
+    uuids=[]
+    if table == "cases":
+        uuids = get_all_case_uuids()
+    else: 
+        uuids = get_uuids(table)
+    print(str(len(uuids)) + " "+table+" in total")
+    if os.path.exists(filename):
+        with open(filename) as jsonfile:
+            jsondict = json.load(jsonfile)
+            print(str(len(jsondict)) + " "+table+" loaded from file")
+    c_uuids = [js["uuid"] for js in jsondict.values()]
+    uuids = [uuid for uuid in uuids if not uuid in c_uuids]
+    print(str(len(uuids))+" "+table+" remaining")
+    for i in range(0, len(uuids),interval):
+        jsonlist = query_uuidlist(table,uuids[i:i+interval])
+        for js in jsonlist:
+            jsondict[js["uuid"]]=js
+        print(str(i))
+        with open(filename, "w") as outfile:
+            json.dump(jsondict, outfile)
